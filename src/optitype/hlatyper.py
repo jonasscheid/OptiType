@@ -5,27 +5,18 @@ This module handles coverage matrix construction, statistical calculations,
 allele pruning, and visualization.
 """
 
+import logging
 import warnings
-from collections import OrderedDict
-from datetime import datetime
+from collections.abc import Callable
 
+import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import pylab
 
-# Module-level verbosity
-VERBOSE = False
+from optitype._logging import elapsed
 
-
-def now(start: datetime = datetime.now()) -> str:
-    """Return elapsed time since start as a string."""
-    return str(datetime.now() - start)[:-4]
-
-
-def set_verbose(verbose: bool) -> None:
-    """Set the verbosity level for the hlatyper module."""
-    global VERBOSE
-    VERBOSE = verbose
+logger = logging.getLogger(__name__)
 
 
 def feature_order(feature: tuple[str, int]) -> int:
@@ -41,8 +32,10 @@ def feature_order(feature: tuple[str, int]) -> int:
         999 for UTR, 2
     """
     feat_type, feat_number = feature
-    assert feat_type in ("intron", "exon", "UTR"), "Unknown feature in list"
-    assert isinstance(feat_number, int), "Feature number has to be integer"
+    if feat_type not in ("intron", "exon", "UTR"):
+        raise ValueError(f"Unknown feature type: {feat_type!r}")
+    if not isinstance(feat_number, int):
+        raise TypeError(f"Feature number must be int, got {type(feat_number).__name__}")
     if feature == ("UTR", 1):
         return 0
     elif feature == ("UTR", 2):
@@ -77,7 +70,8 @@ def get_compact_model(
 
     if weak_hit_df is not None:
         weak_hit_df = weak_hit_df.loc[weak_hit_df.any(axis=1)]
-        assert 0 < weight <= 1, "weak hit weight must be in (0, 1]"
+        if not (0 < weight <= 1):
+            raise ValueError(f"weak hit weight must be in (0, 1], got {weight}")
         weak_occ = {
             r[0]: len(r) * weight
             for r in weak_hit_df.groupby(weak_hit_df.columns.tolist()).groups.values()
@@ -205,7 +199,7 @@ def prune_overshadowed_alleles(binary_mtx: pd.DataFrame) -> pd.Index:
 def create_paired_matrix(
     binary_1: pd.DataFrame,
     binary_2: pd.DataFrame,
-    id_cleaning: "Callable | None" = None,
+    id_cleaning: Callable | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Create paired, mispaired, and unpaired matrices from two binary hit matrices.
@@ -235,12 +229,10 @@ def create_paired_matrix(
     b_mispaired = b_1.loc[~b_ispaired] + b_2.loc[~b_ispaired]
     b_unpaired = pd.concat([binary_1.loc[only_1], binary_2.loc[only_2]])
 
-    if VERBOSE:
-        print(
-            now(),
-            f"Alignment pairing completed. {b_paired.shape[0]} paired, "
-            f"{b_unpaired.shape[0]} unpaired, {b_mispaired.shape[0]} discordant",
-        )
+    logger.debug(
+        "%s Alignment pairing completed. %d paired, %d unpaired, %d discordant",
+        elapsed(), b_paired.shape[0], b_unpaired.shape[0], b_mispaired.shape[0],
+    )
 
     return b_paired, b_mispaired, b_unpaired
 
@@ -308,9 +300,8 @@ def calculate_coverage(
     Returns:
         List of (allele_id, coverage_matrix) tuples.
     """
-    assert len(alignment) in (2, 4, 5), (
-        "Alignment tuple must have 2, 4 or 5 elements"
-    )
+    if len(alignment) not in (2, 4, 5):
+        raise ValueError(f"Alignment tuple must have 2, 4 or 5 elements, got {len(alignment)}")
     has_pairing_info = len(alignment) == 5
 
     if len(alignment) == 2:
@@ -431,7 +422,7 @@ def plot_coverage(
         (0.33, 0.70, 0.88),  # mismatch, mispaired, shared
     ]
 
-    figure = pylab.figure(figsize=(box_size[0] * columns, box_size[1] * subplot_rows), dpi=dpi)
+    figure = plt.figure(figsize=(box_size[0] * columns, box_size[1] * subplot_rows), dpi=dpi)
 
     coverage_matrices = sorted(coverage_matrices, key=allele_sorter)
     prev_locus = ""
@@ -452,7 +443,7 @@ def plot_coverage(
 
         prev_locus = get_allele_locus(allele)
 
-        plot = pylab.subplot2grid(
+        plot = plt.subplot2grid(
             (subplot_rows, columns),
             (3 * i_locus, i_allele_in_locus),
             rowspan=3,
@@ -521,16 +512,15 @@ def plot_coverage(
         plot.set_ylim(bottom=0.5)
 
     # Legend
-    legend = pylab.subplot2grid((subplot_rows, columns), (subplot_rows - 1, 0), colspan=2, adjustable="box")
-    ppp = pylab.matplotlib.patches
-    legend.add_patch(ppp.Rectangle((0, 2), 2, 2, color=area_colors[0]))
-    legend.add_patch(ppp.Rectangle((0, 0), 2, 2, color=area_colors[1]))
-    legend.add_patch(ppp.Rectangle((25, 2), 2, 2, color=area_colors[2]))
-    legend.add_patch(ppp.Rectangle((25, 0), 2, 2, color=area_colors[4]))
-    legend.add_patch(ppp.Rectangle((50, 2), 2, 2, color=area_colors[6]))
-    legend.add_patch(ppp.Rectangle((50, 0), 2, 2, color=area_colors[7]))
-    legend.add_patch(ppp.Rectangle((75, 2), 2, 2, color=area_colors[8]))
-    legend.add_patch(ppp.Rectangle((75, 0), 2, 2, color=area_colors[10]))
+    legend = plt.subplot2grid((subplot_rows, columns), (subplot_rows - 1, 0), colspan=2, adjustable="box")
+    legend.add_patch(mpatches.Rectangle((0, 2), 2, 2, color=area_colors[0]))
+    legend.add_patch(mpatches.Rectangle((0, 0), 2, 2, color=area_colors[1]))
+    legend.add_patch(mpatches.Rectangle((25, 2), 2, 2, color=area_colors[2]))
+    legend.add_patch(mpatches.Rectangle((25, 0), 2, 2, color=area_colors[4]))
+    legend.add_patch(mpatches.Rectangle((50, 2), 2, 2, color=area_colors[6]))
+    legend.add_patch(mpatches.Rectangle((50, 0), 2, 2, color=area_colors[7]))
+    legend.add_patch(mpatches.Rectangle((75, 2), 2, 2, color=area_colors[8]))
+    legend.add_patch(mpatches.Rectangle((75, 0), 2, 2, color=area_colors[10]))
     legend.text(2.5, 3, "paired, no mismatches, unique", va="center", size="smaller")
     legend.text(2.5, 1, "paired, no mismatches, ambiguous", va="center", size="smaller")
     legend.text(27.5, 3, "unpaired, no mismatches, unique", va="center", size="smaller")
@@ -545,3 +535,4 @@ def plot_coverage(
 
     figure.tight_layout()
     figure.savefig(outfile)
+    plt.close(figure)

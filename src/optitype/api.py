@@ -4,7 +4,7 @@ Programmatic API for OptiType.
 This module provides a clean Python API for running HLA typing analyses.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,7 @@ class HLATypingConfig:
         mapping_threads: Number of threads for read mapping.
         razers3_path: Path to RazerS3 binary.
         beta: Homozygosity detection parameter (0.0 to 0.1).
-        enumerate: Number of solutions to enumerate.
+        enumerate_count: Number of solutions to enumerate.
         delete_bam: Whether to delete intermediate BAM files.
         unpaired_weight: Weight for unpaired reads in paired-end mode.
         use_discordant: Whether to use discordant read pairs.
@@ -35,7 +35,7 @@ class HLATypingConfig:
     mapping_threads: int = 4
     razers3_path: str = "razers3"
     beta: float = 0.009
-    enumerate: int = 1
+    enumerate_count: int = 1
     delete_bam: bool = True
     unpaired_weight: float = 0.0
     use_discordant: bool = False
@@ -165,7 +165,7 @@ def run_hla_typing(
         seq_type=seq_type,
         output_dir=str(output_dir),
         beta=config.beta,
-        enumerate_count=config.enumerate,
+        enumerate_count=config.enumerate_count,
         config=pipeline_config,
         verbose=verbose,
     )

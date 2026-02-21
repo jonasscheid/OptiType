@@ -6,28 +6,27 @@ read mapping, matrix construction, and ILP solving.
 """
 
 import datetime
+import logging
 import multiprocessing
 import os
+import shutil
 import subprocess
 import time
 from collections import defaultdict
 from configparser import ConfigParser
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from optitype import hlatyper as ht
-from optitype.io.data import get_data_path, get_reference_fasta, load_reference_data
-from optitype.io.readers import pysam_to_dataframe, set_verbose as set_reader_verbose
+from optitype._logging import configure_logging, elapsed
+from optitype.io.data import get_reference_fasta, load_reference_data
+from optitype.io.readers import PYSAM_AVAILABLE, pysam_to_dataframe
 from optitype.model import OptiType
 
-try:
-    import pysam
-    PYSAM_AVAILABLE = True
-except ImportError:
-    PYSAM_AVAILABLE = False
+logger = logging.getLogger(__name__)
 
 
 # Frequent alleles list for filtering
@@ -146,8 +145,7 @@ def run_pipeline(
         config = PipelineConfig()
 
     # Set verbosity
-    ht.set_verbose(verbose)
-    set_reader_verbose(verbose)
+    configure_logging(verbose)
 
     # Validate inputs
     if len(input_files) not in (1, 2):
@@ -193,30 +191,36 @@ def run_pipeline(
 
     # Run mapping if needed
     if not bam_input:
+        if not shutil.which(config.razers3_path):
+            raise FileNotFoundError(
+                f"RazerS3 not found: {config.razers3_path!r}. "
+                "Install with: conda install -c bioconda razers3"
+            )
+
         threads = get_num_threads(config.mapping_threads)
-        if verbose:
-            print(f"\nmapping with {threads} threads...")
+        logger.debug("Mapping with %d threads...", threads)
 
         mapping_ref = get_reference_fasta(seq_type)
-        mapping_cmd = f"{config.razers3_path} -i 97 -m 99999 --distance-range 0 -pa -tc {{threads}} -o {{output}} {{ref}} {{input}}"
+        for sample, outbam in zip(input_files, bam_paths):
+            logger.debug("%s Mapping %s to %s reference...", elapsed(), os.path.basename(sample), ref_type.upper())
 
-        for i, (sample, outbam) in enumerate(zip(input_files, bam_paths)):
-            if verbose:
-                print(f"\n{ht.now()} Mapping {os.path.basename(sample)} to {ref_type.upper()} reference...")
-
-            cmd = mapping_cmd.format(
-                threads=threads,
-                output=outbam,
-                ref=mapping_ref,
-                input=sample,
-            )
-            subprocess.call(cmd, shell=True)
+            cmd = [
+                config.razers3_path,
+                "-i", "97",
+                "-m", "99999",
+                "--distance-range", "0",
+                "-pa",
+                "-tc", str(threads),
+                "-o", str(outbam),
+                str(mapping_ref),
+                str(sample),
+            ]
+            subprocess.run(cmd, check=True)
 
     # Load reference data
     table, features = load_reference_data()
 
-    if verbose:
-        print(f"\n{ht.now()} Generating binary hit matrix.")
+    logger.debug("%s Generating binary hit matrix.", elapsed())
 
     # Process alignments
     if is_paired:
@@ -246,10 +250,11 @@ def run_pipeline(
         binary_p, binary_mis, binary_un = ht.create_paired_matrix(binary1, binary2)
 
         if binary_p.shape[0] < len(id1) * 0.1:
-            print(
-                f"\nWARNING: Less than 10% of reads could be paired. Consider an appropriate "
-                f"unpaired_weight setting in your config file (currently {config.unpaired_weight:.3f}), "
-                "because you may need to resort to using unpaired reads."
+            logger.warning(
+                "Less than 10%% of reads could be paired. Consider an appropriate "
+                "unpaired_weight setting in your config file (currently %.3f), "
+                "because you may need to resort to using unpaired reads.",
+                config.unpaired_weight,
             )
 
         if config.unpaired_weight > 0:
@@ -271,8 +276,7 @@ def run_pipeline(
     alleles_to_keep = [col for col in binary.columns if _is_frequent(col, table)]
     binary = binary[alleles_to_keep]
 
-    if verbose:
-        print(f"\n{ht.now()} temporary pruning of identical rows and columns")
+    logger.debug("%s Temporary pruning of identical rows and columns", elapsed())
 
     unique_col, representing = ht.prune_identical_alleles(binary, report_groups=True)
     representing_df = pd.DataFrame(
@@ -282,19 +286,16 @@ def run_pipeline(
 
     temp_pruned = ht.prune_identical_reads(unique_col)
 
-    if verbose:
-        print(f"\n{ht.now()} Size of mtx with unique rows and columns: {temp_pruned.shape}")
-        print(f"{ht.now()} determining minimal set of non-overshadowed alleles")
+    logger.debug("%s Size of mtx with unique rows and columns: %s", elapsed(), temp_pruned.shape)
+    logger.debug("%s Determining minimal set of non-overshadowed alleles", elapsed())
 
     minimal_alleles = ht.prune_overshadowed_alleles(temp_pruned)
 
-    if verbose:
-        print(f"\n{ht.now()} Keeping only the minimal number of required alleles {minimal_alleles.shape}")
+    logger.debug("%s Keeping only the minimal number of required alleles %s", elapsed(), minimal_alleles.shape)
 
     binary = binary[minimal_alleles]
 
-    if verbose:
-        print(f"\n{ht.now()} Creating compact model...")
+    logger.debug("%s Creating compact model...", elapsed())
 
     if is_paired and config.unpaired_weight > 0:
         if config.use_discordant:
@@ -322,9 +323,8 @@ def run_pipeline(
     sparse_dict = ht.mtx_to_sparse_dict(compact_mtx)
     threads = get_num_threads(config.ilp_threads)
 
-    if verbose:
-        print(f"\nstarting ilp solver with {threads} threads...")
-        print(f"\n{ht.now()} Initializing OptiType model...")
+    logger.debug("Starting ILP solver with %d threads...", threads)
+    logger.debug("%s Initializing OptiType model...", elapsed())
 
     op = OptiType(
         sparse_dict,
@@ -339,8 +339,7 @@ def run_pipeline(
     )
     result = op.solve(enumerate_count)
 
-    if verbose:
-        print(f"\n{ht.now()} Result dataframe has been constructed...")
+    logger.debug("%s Result dataframe has been constructed...", elapsed())
 
     result_4digit = result.map(lambda x: _get_types(x, table))
     for col in ["A1", "A2", "B1", "B2", "C1", "C2"]:

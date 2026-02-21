@@ -6,6 +6,7 @@ HLA allele selection using Pyomo.
 """
 
 import itertools
+import logging
 from collections import defaultdict
 
 import pandas as pd
@@ -20,7 +21,10 @@ from pyomo.environ import (
     Var,
     maximize,
 )
+from pyomo.common.errors import ApplicationError
 from pyomo.opt import SolverFactory, TerminationCondition
+
+logger = logging.getLogger(__name__)
 
 
 class OptiType:
@@ -72,7 +76,6 @@ class OptiType:
         loci_alleles = defaultdict(list)
         for type_4digit, group_alleles in groups_4digit.items():
             loci_alleles[type_4digit.split("*")[0]].extend(group_alleles)
-        loci = loci_alleles
 
         self._allele_to_4digit = {
             allele: type_4digit
@@ -84,10 +87,10 @@ class OptiType:
         model = ConcreteModel()
 
         # Initialize Sets
-        model.LociNames = Set(initialize=list(loci.keys()))
-        model.Loci = Set(model.LociNames, initialize=lambda m, l: loci[l])
+        model.LociNames = Set(initialize=list(loci_alleles.keys()))
+        model.Loci = Set(model.LociNames, initialize=lambda m, l: loci_alleles[l])
 
-        L = list(itertools.chain(*list(loci.values())))
+        L = list(itertools.chain(*list(loci_alleles.values())))
         reconst = {allele_id: 0.01 for allele_id in L if "_" in allele_id}
         R = set(r for (r, _) in cov.keys())
         model.L = Set(initialize=L)
@@ -103,7 +106,7 @@ class OptiType:
             validate=lambda val, model: 0.0 <= float(self._beta) <= 0.999,
             mutable=True,
         )
-        model.nof_loci = Param(initialize=len(loci))
+        model.nof_loci = Param(initialize=len(loci_alleles))
 
         # Initialize Variables
         model.x = Var(model.L, domain=Binary)
@@ -154,15 +157,32 @@ class OptiType:
 
         self._instance = model
 
+    def _append_result(self, selected: list, result_dict: dict, instance) -> None:
+        """Append a solution's allele assignments and scores to the result dict."""
+        loci = [self._allele_to_4digit[x].split("*")[0] for x in selected]
+        locus_count = dict.fromkeys(loci, 1)
+
+        for i, locus in enumerate(loci):
+            if loci.count(locus) < 2:
+                result_dict[locus + "1"].append(selected[i])
+                result_dict[locus + "2"].append(selected[i])
+            else:
+                result_dict[locus + str(locus_count[locus])].append(selected[i])
+                locus_count[locus] += 1
+
+        nof_reads = sum(instance.occ[j] * instance.y[j].value for j in instance.y)
+        result_dict["obj"].append(instance.read_cov())
+        result_dict["nof_reads"].append(nof_reads)
+
     def set_beta(self, beta: float) -> None:
         """Set the beta parameter for homozygosity detection."""
         self._changed = True
-        getattr(self._instance, str(self._instance.beta)).set_value(float(beta))
+        self._instance.beta.set_value(float(beta))
 
     def set_t_max_allele(self, t_max_allele: int) -> None:
         """Set the upper bound of alleles selected per locus."""
         self._changed = True
-        getattr(self._instance, str(self._instance.t_allele)).set_value(t_max_allele)
+        self._instance.t_allele.set_value(t_max_allele)
 
     def solve(self, ks: int) -> pd.DataFrame:
         """
@@ -186,10 +206,9 @@ class OptiType:
                     res = self._solver.solve(
                         self._instance, options=self._opts, tee=self._verbosity
                     )
-                except Exception:
-                    print(
-                        "WARNING: Solver does not support multi-threading. "
-                        "Please change the config file accordingly. "
+                except (RuntimeError, ApplicationError):
+                    logger.warning(
+                        "Solver does not support multi-threading. "
                         "Falling back to single-threading."
                     )
                     res = self._solver.solve(self._instance, options={}, tee=self._verbosity)
@@ -197,7 +216,7 @@ class OptiType:
                 self._instance.solutions.load_from(res)
 
                 if res.solver.termination_condition != TerminationCondition.optimal:
-                    print("Optimal solution hasn't been obtained. This is a terminal problem.")
+                    logger.error("Optimal solution hasn't been obtained. This is a terminal problem.")
                     break
 
                 selected = []
@@ -232,23 +251,7 @@ class OptiType:
 
                 self._instance.c.add(expr >= 1)
 
-                # Build result dictionary
-                aas = [self._allele_to_4digit[x].split("*")[0] for x in selected]
-                c = dict.fromkeys(aas, 1)
-
-                for i in range(len(aas)):
-                    if aas.count(aas[i]) < 2:
-                        d[aas[i] + "1"].append(selected[i])
-                        d[aas[i] + "2"].append(selected[i])
-                    else:
-                        d[aas[i] + str(c[aas[i]])].append(selected[i])
-                        c[aas[i]] += 1
-
-                nof_reads = sum(
-                    self._instance.occ[j] * self._instance.y[j].value for j in self._instance.y
-                )
-                d["obj"].append(self._instance.read_cov())
-                d["nof_reads"].append(nof_reads)
+                self._append_result(selected, d, self._instance)
 
             self._instance.c.clear()
             self._changed = False
@@ -278,7 +281,7 @@ class OptiType:
             )
 
         inst = self._instance.clone()
-        getattr(inst, str(inst.beta)).set_value(float(0.0))
+        inst.beta.set_value(0.0)
 
         inst.del_component("heterozygot_count")
         inst.del_component("reg1")
@@ -293,9 +296,9 @@ class OptiType:
         for _ in range(ks):
             try:
                 res = self._solver.solve(inst, options=self._opts, tee=self._verbosity)
-            except Exception:
-                print(
-                    "WARNING: Solver does not support multi-threading. "
+            except (RuntimeError, ApplicationError):
+                logger.warning(
+                    "Solver does not support multi-threading. "
                     "Falling back to single-threading."
                 )
                 res = self._solver.solve(inst, options={}, tee=self._verbosity)
@@ -306,7 +309,7 @@ class OptiType:
                 res.write(num=1)
 
             if res.solver.termination_condition != TerminationCondition.optimal:
-                print("Optimal solution hasn't been obtained.")
+                logger.error("Optimal solution hasn't been obtained.")
                 break
 
             selected = []
@@ -336,23 +339,9 @@ class OptiType:
 
             inst.c.add(expr >= 1)
 
-            if self._verbosity:
-                print(selected)
+            logger.debug("Selected alleles: %s", selected)
 
-            aas = [self._allele_to_4digit[x].split("*")[0] for x in selected]
-            c = dict.fromkeys(aas, 1)
-
-            for i in range(len(aas)):
-                if aas.count(aas[i]) < 2:
-                    d[aas[i] + "1"].append(selected[i])
-                    d[aas[i] + "2"].append(selected[i])
-                else:
-                    d[aas[i] + str(c[aas[i]])].append(selected[i])
-                    c[aas[i]] += 1
-
-            nof_reads = sum(inst.occ[j] * inst.y[j].value for j in inst.y)
-            d["obj"].append(inst.read_cov())
-            d["nof_reads"].append(nof_reads)
+            self._append_result(selected, d, inst)
 
         return pd.DataFrame(d)
 
@@ -367,7 +356,7 @@ class OptiType:
             DataFrame with typing results.
         """
         inst = self._instance.clone()
-        getattr(inst, str(inst.beta)).set_value(float(0.0))
+        inst.beta.set_value(0.0)
 
         inst.del_component("heterozygot_count")
         inst.del_component("reg1")
@@ -383,9 +372,9 @@ class OptiType:
 
         try:
             res = self._solver.solve(inst, options=self._opts, tee=self._verbosity)
-        except Exception:
-            print(
-                "WARNING: Solver does not support multi-threading. "
+        except (RuntimeError, ApplicationError):
+            logger.warning(
+                "Solver does not support multi-threading. "
                 "Falling back to single-threading."
             )
             res = self._solver.solve(inst, options={}, tee=self._verbosity)
@@ -393,19 +382,6 @@ class OptiType:
         inst.solutions.load_from(res)
 
         selected = [al for al in inst.x if 0.99 <= inst.x[al].value <= 1.01]
-        aas = [self._allele_to_4digit[x].split("*")[0] for x in selected]
-        c = dict.fromkeys(aas, 1)
-
-        for q in range(len(aas)):
-            if aas.count(aas[q]) < 2:
-                d[aas[q] + "1"].append(selected[q])
-                d[aas[q] + "2"].append(selected[q])
-            else:
-                d[aas[q] + str(c[aas[q]])].append(selected[q])
-                c[aas[q]] += 1
-
-        nof_reads = sum(inst.occ[h] * inst.y[h].value for h in inst.y)
-        d["obj"].append(inst.read_cov())
-        d["nof_reads"].append(nof_reads)
+        self._append_result(selected, d, inst)
 
         return pd.DataFrame(d)

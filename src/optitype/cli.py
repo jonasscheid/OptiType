@@ -2,14 +2,12 @@
 Click-based command-line interface for OptiType.
 
 Usage:
-    optitype run -i sample_1.fq sample_2.fq --dna -o output/
+    optitype run -i sample_1.fq -i sample_2.fq --dna -o output/
     optitype check-deps
     optitype init-config
 """
 
-import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -35,7 +33,7 @@ def main():
 
     \b
     Example usage:
-      optitype run -i reads_1.fq reads_2.fq --dna -o results/
+      optitype run -i reads_1.fq -i reads_2.fq --dna -o results/
       optitype run -i sample.bam --rna -o results/
     """
     pass
@@ -149,7 +147,7 @@ def run(
     \b
     Examples:
       # Paired-end DNA analysis
-      optitype run -i reads_1.fq reads_2.fq --dna -o results/
+      optitype run -i reads_1.fq -i reads_2.fq --dna -o results/
 
       # Single-end RNA analysis
       optitype run -i sample.fastq --rna -o results/
@@ -313,12 +311,11 @@ def check_deps():
     click.echo()
     if all_ok and (glpsol or cbc):
         click.echo(click.style("All required dependencies are available!", fg="green"))
-        return 0
     else:
         click.echo(click.style("Some dependencies are missing.", fg="red"))
         if not (glpsol or cbc):
             click.echo("At least one ILP solver (GLPK or CBC) is required.")
-        return 1
+        raise SystemExit(1)
 
 
 @main.command("init-config")

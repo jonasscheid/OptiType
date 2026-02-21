@@ -42,15 +42,9 @@ def get_data_path() -> Path:
             return share_path
 
     # Development mode: check relative to package
-    package_dir = Path(__file__).parent.parent.parent.parent
-    dev_data_path = package_dir / "data"
+    dev_data_path = Path(__file__).parent.parent.parent.parent / "data"
     if dev_data_path.exists():
         return dev_data_path
-
-    # Check for data next to the package source
-    src_data_path = Path(__file__).parent.parent.parent.parent / "data"
-    if src_data_path.exists():
-        return src_data_path
 
     raise FileNotFoundError(
         "Could not find OptiType reference data. "

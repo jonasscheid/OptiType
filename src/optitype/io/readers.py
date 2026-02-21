@@ -1,12 +1,15 @@
 """SAM/BAM file parsing utilities."""
 
+import logging
 import re
 import sys
 from collections import OrderedDict
-from datetime import datetime
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
+
+from optitype._logging import elapsed
 
 try:
     import pysam
@@ -14,31 +17,16 @@ try:
 except ImportError:
     PYSAM_AVAILABLE = False
 
-# Module-level verbosity setting
-VERBOSE = False
+logger = logging.getLogger(__name__)
 
 # CIGAR pattern for calculating read span on reference
 CIGAR_SLICER = re.compile(r"[0-9]+[MD]")
 
 
-def _now(start: datetime = datetime.now()) -> str:
-    """Return elapsed time since start as a string."""
-    return str(datetime.now() - start)[:-4]
-
-
-def _memoize(f):
-    """Simple memoization decorator for single-argument functions."""
-    class MemoDict(dict):
-        def __missing__(self, key):
-            ret = self[key] = f(key)
-            return ret
-    return MemoDict().__getitem__
-
-
-@_memoize
+@lru_cache(maxsize=None)
 def _length_on_reference(cigar_string: str) -> int:
     """Calculate the length a read spans on the reference from its CIGAR string."""
-    return sum(int(p[:-1]) for p in re.findall(CIGAR_SLICER, cigar_string))
+    return sum(int(p[:-1]) for p in CIGAR_SLICER.findall(cigar_string))
 
 
 def sam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -53,8 +41,7 @@ def sam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     Returns:
         Tuple of (matrix_pos, read_details) DataFrames.
     """
-    if VERBOSE:
-        print(_now(), f"Loading alleles and read IDs from {samfile}...")
+    logger.debug("%s Loading alleles and read IDs from %s...", elapsed(), samfile)
 
     read_ids, allele_ids = [], []
     first_hit_row = True
@@ -82,12 +69,11 @@ def sam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
                 try:
                     nm_index = [x.startswith("NM:") for x in columns].index(True)
                 except ValueError:
-                    print("\tNo NM-tag found in SAM file!")
+                    logger.warning("No NM-tag found in SAM file!")
                     nm_index = None
 
-    if VERBOSE:
-        print(_now(), f"{len(allele_ids)} alleles and {len(read_ids)} reads found.")
-        print(_now(), "Initializing mapping matrix...")
+    logger.debug("%s %d alleles and %d reads found.", elapsed(), len(allele_ids), len(read_ids))
+    logger.debug("%s Initializing mapping matrix...", elapsed())
 
     matrix_pos = pd.DataFrame(
         np.zeros((len(read_ids), len(allele_ids)), dtype=np.uint16),
@@ -97,12 +83,10 @@ def sam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     read_details = OrderedDict()
 
-    if VERBOSE:
-        print(
-            _now(),
-            f"{len(read_ids)}x{len(allele_ids)} mapping matrix initialized. "
-            f"Populating {total_hits} hits from SAM file...",
-        )
+    logger.debug(
+        "%s %dx%d mapping matrix initialized. Populating %d hits from SAM file...",
+        elapsed(), len(read_ids), len(allele_ids), total_hits,
+    )
 
     milestones = [x * total_hits // 10 for x in range(1, 11)]
 
@@ -116,7 +100,7 @@ def sam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
 
             fields = line.strip().split("\t")
             read_id, allele_id, position, cigar = fields[0], fields[2], fields[3], fields[5]
-            nm = fields[nm_index] if nm_index else "NM:i:0"
+            nm = fields[nm_index] if nm_index is not None else "NM:i:0"
 
             if read_id not in read_details:
                 read_details[read_id] = (int(nm[5:]), _length_on_reference(cigar))
@@ -126,15 +110,12 @@ def sam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
             counter += 1
             if counter in milestones:
                 percent += 10
-                if VERBOSE:
-                    print(f"\t{percent}% completed")
+                logger.debug("\t%d%% completed", percent)
 
-    if VERBOSE:
-        sparsity = matrix_pos.shape[0] * matrix_pos.shape[1] / float(counter)
-        print(
-            _now(),
-            f"{counter} elements filled. Matrix sparsity: 1 in {sparsity:.2f}",
-        )
+    logger.debug(
+        "%s %d elements filled. Matrix sparsity: 1 in %.2f",
+        elapsed(), counter, matrix_pos.shape[0] * matrix_pos.shape[1] / float(counter),
+    )
 
     matrix_pos.rename(columns=lambda x: x.replace("HLA:", ""), inplace=True)
 
@@ -155,7 +136,7 @@ def pysam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         Tuple of (matrix_pos, read_details) DataFrames.
     """
     if not PYSAM_AVAILABLE:
-        print("Warning: PySam not available on the system. Falling back to primitive SAM parsing.")
+        logger.warning("PySam not available. Falling back to primitive SAM parsing.")
         return sam_to_dataframe(samfile)
 
     sam_or_bam = "rb" if samfile.endswith(".bam") else "r"
@@ -170,11 +151,10 @@ def pysam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     allele_id_to_index = {aa: ii for ii, aa in enumerate(sam.references)}
     read_details = OrderedDict()
 
-    if VERBOSE:
-        print(
-            _now(),
-            f"Loading {samfile} started. Number of HLA reads loaded (updated every thousand):",
-        )
+    logger.debug(
+        "%s Loading %s started. Number of HLA reads loaded (updated every thousand):",
+        elapsed(), samfile,
+    )
 
     read_counter = 0
     hit_counter = 0
@@ -185,7 +165,7 @@ def pysam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
             read_details[aln.qname] = (aln.get_tag("NM"), aln.query_length)
             read_counter += 1
 
-            if VERBOSE and not (read_counter % 1000):
+            if logger.isEnabledFor(logging.DEBUG) and not (read_counter % 1000):
                 sys.stdout.write(f"{len(hits) // 1000}K...")
                 sys.stdout.flush()
 
@@ -200,8 +180,7 @@ def pysam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         hits[aln.qname][aln.reference_id] = aln.reference_start + 1
         hit_counter += 1
 
-    if VERBOSE:
-        print("\n", _now(), len(hits), "reads loaded. Creating dataframe...")
+    logger.debug("\n %s %d reads loaded. Creating dataframe...", elapsed(), len(hits))
 
     pos_df = pd.DataFrame.from_dict(hits, orient="index")
     pos_df.columns = sam.references[:]
@@ -209,18 +188,11 @@ def pysam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     details_df = pd.DataFrame.from_dict(read_details, orient="index")
     details_df.columns = ["mismatches", "read_length"]
 
-    if VERBOSE:
-        sparsity = pos_df.shape[0] * pos_df.shape[1] / float(hit_counter)
-        print(
-            _now(),
-            f"Dataframes created. Shape: {pos_df.shape[0]} x {pos_df.shape[1]}, "
-            f"hits: {np.sign(pos_df).sum().sum()} ({hit_counter}), sparsity: 1 in {sparsity:.2f}",
-        )
+    logger.debug(
+        "%s Dataframes created. Shape: %d x %d, hits: %s (%d), sparsity: 1 in %.2f",
+        elapsed(), pos_df.shape[0], pos_df.shape[1],
+        np.sign(pos_df).sum().sum(), hit_counter,
+        pos_df.shape[0] * pos_df.shape[1] / float(hit_counter),
+    )
 
     return pos_df, details_df
-
-
-def set_verbose(verbose: bool) -> None:
-    """Set the verbosity level for the readers module."""
-    global VERBOSE
-    VERBOSE = verbose
