@@ -179,10 +179,11 @@ def run(
             param_hint="'-e/--enumerate'",
         )
 
-    # Determine razers3 path
+    # Determine razers3 path (only required for FASTQ input, not BAM/SAM)
+    bam_input = input_files[0].split(".")[-1].lower() in ("sam", "bam")
     if razers3 is None:
-        razers3 = shutil.which("razers3")
-        if razers3 is None:
+        razers3 = shutil.which("razers3") or "razers3"
+        if not bam_input and not shutil.which(razers3):
             raise click.ClickException(
                 "RazerS3 not found in PATH. Install with: conda install -c bioconda razers3\n"
                 "Or specify path with --razers3 option or OPTITYPE_RAZERS3 environment variable."
