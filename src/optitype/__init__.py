@@ -6,7 +6,7 @@ programming, capable of producing accurate 4-digit HLA genotyping predictions
 from NGS data by simultaneously selecting all minor and major HLA-I alleles.
 """
 
-__version__ = "2.0.0"
+__version__ = "1.5.0"
 __author__ = "Andras Szolek, Benjamin Schubert, Christopher Mohr, Jonas Scheid"
 
 from optitype.api import HLATypingConfig, HLATypingResult, run_hla_typing

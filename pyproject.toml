@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "optitype"
-version = "2.0.0"
+version = "1.5.0"
 description = "Precision HLA typing from next-generation sequencing data"
 readme = "README.md"
 license = {text = "BSD-3-Clause"}

@@ -6,7 +6,7 @@
 Precision HLA typing from next-generation sequencing data
 
 **Authors:** András Szolek, Benjamin Schubert, Christopher Mohr, Jonas Scheid
-**Version:** 2.0.0
+**Version:** 1.5.0
 **License:** BSD-3-Clause
 
 ## Introduction
@@ -192,7 +192,7 @@ Example output:
 
 ## Migration from v1.x
 
-Version 2.0 introduces a modernized CLI. Main changes:
+Version 1.5 introduces a modernized CLI. Main changes:
 
 - Install with `pip install optitype`
 - Use `optitype run` instead of `python OptiTypePipeline.py`
