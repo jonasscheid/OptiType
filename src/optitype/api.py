@@ -10,7 +10,7 @@ from typing import Any
 
 import pandas as pd
 
-from optitype.pipeline import PipelineConfig, load_config, run_pipeline
+from optitype.pipeline import PipelineConfig, load_config, load_mapper_config, run_pipeline
 
 
 @dataclass
@@ -22,7 +22,9 @@ class HLATypingConfig:
         solver: ILP solver to use ('glpk', 'cbc', 'cplex').
         threads: Number of threads for ILP solving.
         mapping_threads: Number of threads for read mapping.
+        mapper: Read mapper to use ('razers3' or 'yara').
         razers3_path: Path to RazerS3 binary.
+        mapper_config: Path to mapper config file with custom alignment args.
         beta: Homozygosity detection parameter (0.0 to 0.1).
         enumerate_count: Number of solutions to enumerate.
         delete_bam: Whether to delete intermediate BAM files.
@@ -33,7 +35,9 @@ class HLATypingConfig:
     solver: str = "glpk"
     threads: int = 1
     mapping_threads: int = 4
+    mapper: str = "razers3"
     razers3_path: str = "razers3"
+    mapper_config: str | Path | None = None
     beta: float = 0.009
     enumerate_count: int = 1
     delete_bam: bool = True
@@ -42,8 +46,12 @@ class HLATypingConfig:
 
     def to_pipeline_config(self) -> PipelineConfig:
         """Convert to internal PipelineConfig."""
+        razers3_args, yara_args = load_mapper_config(self.mapper_config)
         return PipelineConfig(
             razers3_path=self.razers3_path,
+            mapper=self.mapper,
+            razers3_args=razers3_args,
+            yara_args=yara_args,
             mapping_threads=self.mapping_threads,
             solver=self.solver,
             ilp_threads=self.threads,
@@ -156,6 +164,8 @@ def run_hla_typing(
         # Merge file config with API config (API takes precedence)
         if config.razers3_path == "razers3":
             pipeline_config.razers3_path = file_config.razers3_path
+        if config.mapper == "razers3":
+            pipeline_config.mapper = file_config.mapper
         if config.solver == "glpk":
             pipeline_config.solver = file_config.solver
 

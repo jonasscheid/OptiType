@@ -112,10 +112,13 @@ def sam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
                 percent += 10
                 logger.debug("\t%d%% completed", percent)
 
-    logger.debug(
-        "%s %d elements filled. Matrix sparsity: 1 in %.2f",
-        elapsed(), counter, matrix_pos.shape[0] * matrix_pos.shape[1] / float(counter),
-    )
+    if counter > 0:
+        logger.debug(
+            "%s %d elements filled. Matrix sparsity: 1 in %.2f",
+            elapsed(), counter, matrix_pos.shape[0] * matrix_pos.shape[1] / float(counter),
+        )
+    else:
+        logger.debug("%s No alignments found in SAM file.", elapsed())
 
     matrix_pos.rename(columns=lambda x: x.replace("HLA:", ""), inplace=True)
 
@@ -162,7 +165,8 @@ def pysam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     for aln in sam:
         if aln.qname not in hits:
             hits[aln.qname] = np.zeros(nref, dtype=np.uint16)
-            read_details[aln.qname] = (aln.get_tag("NM"), aln.query_length)
+            nm = aln.get_tag("NM") if aln.has_tag("NM") else 0
+            read_details[aln.qname] = (nm, aln.query_length)
             read_counter += 1
 
             if logger.isEnabledFor(logging.DEBUG) and not (read_counter % 1000):
@@ -188,11 +192,14 @@ def pysam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     details_df = pd.DataFrame.from_dict(read_details, orient="index")
     details_df.columns = ["mismatches", "read_length"]
 
-    logger.debug(
-        "%s Dataframes created. Shape: %d x %d, hits: %s (%d), sparsity: 1 in %.2f",
-        elapsed(), pos_df.shape[0], pos_df.shape[1],
-        np.sign(pos_df).sum().sum(), hit_counter,
-        pos_df.shape[0] * pos_df.shape[1] / float(hit_counter),
-    )
+    if hit_counter > 0:
+        logger.debug(
+            "%s Dataframes created. Shape: %d x %d, hits: %s (%d), sparsity: 1 in %.2f",
+            elapsed(), pos_df.shape[0], pos_df.shape[1],
+            np.sign(pos_df).sum().sum(), hit_counter,
+            pos_df.shape[0] * pos_df.shape[1] / float(hit_counter),
+        )
+    else:
+        logger.debug("%s No alignments found in %s.", elapsed(), samfile)
 
     return pos_df, details_df

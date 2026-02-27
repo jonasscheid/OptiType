@@ -29,6 +29,7 @@ def main():
     \b
     External dependencies:
       - RazerS3: For read mapping (conda install -c bioconda razers3)
+      - YARA: Optional alternative mapper (conda install -c bioconda yara)
       - ILP solver: GLPK, CBC, or CPLEX
 
     \b
@@ -93,6 +94,12 @@ def main():
     help="ILP solver to use. Default: glpk.",
 )
 @click.option(
+    "--mapper",
+    type=click.Choice(["razers3", "yara"]),
+    default="razers3",
+    help="Read mapper to use. Default: razers3.",
+)
+@click.option(
     "--razers3",
     type=click.Path(),
     default=None,
@@ -123,6 +130,12 @@ def main():
     help="Path to config.ini file for additional settings.",
 )
 @click.option(
+    "--mapper-config",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to mapper config file with custom alignment parameters.",
+)
+@click.option(
     "-v", "--verbose",
     is_flag=True,
     help="Enable verbose output.",
@@ -135,11 +148,13 @@ def run(
     beta,
     enumerate_count,
     solver,
+    mapper,
     razers3,
     threads,
     ilp_threads,
     keep_bam,
     config,
+    mapper_config,
     verbose,
 ):
     """Run HLA typing analysis.
@@ -158,56 +173,25 @@ def run(
       # With custom settings
       optitype run -i reads.fq --dna -o results/ --solver cbc --threads 8
     """
-    from optitype.pipeline import PipelineConfig, run_pipeline
+    from optitype.pipeline import PipelineConfig, load_config, load_mapper_config, run_pipeline
 
-    # Validate inputs
-    if len(input_files) not in (1, 2):
-        raise click.BadParameter(
-            "Number of input files must be 1 (single-end) or 2 (paired-end)",
-            param_hint="'-i/--input'",
-        )
-
-    if not 0.0 <= beta < 0.1:
-        raise click.BadParameter(
-            "Beta must be between 0.0 and 0.1",
-            param_hint="'-b/--beta'",
-        )
-
-    if enumerate_count < 1:
-        raise click.BadParameter(
-            "Enumerate count must be at least 1",
-            param_hint="'-e/--enumerate'",
-        )
-
-    # Determine razers3 path (only required for FASTQ input, not BAM/SAM)
-    bam_input = input_files[0].split(".")[-1].lower() in ("sam", "bam")
+    # Resolve razers3 path (--razers3 option or search PATH)
     if razers3 is None:
         razers3 = shutil.which("razers3") or "razers3"
-        if not bam_input and not shutil.which(razers3):
-            raise click.ClickException(
-                "RazerS3 not found in PATH. Install with: conda install -c bioconda razers3\n"
-                "Or specify path with --razers3 option or OPTITYPE_RAZERS3 environment variable."
-            )
 
-    # Create config
-    pipeline_config = PipelineConfig(
-        razers3_path=razers3,
-        mapping_threads=threads,
-        solver=solver,
-        ilp_threads=ilp_threads,
-        delete_bam=not keep_bam,
-        unpaired_weight=0.0,
-        use_discordant=False,
-    )
+    # Load mapper-specific arguments
+    razers3_args, yara_args = load_mapper_config(mapper_config)
 
-    # Load additional settings from config file if provided
-    if config:
-        from optitype.pipeline import load_config
-        file_config = load_config(config)
-        if file_config.unpaired_weight > 0:
-            pipeline_config.unpaired_weight = file_config.unpaired_weight
-        if file_config.use_discordant:
-            pipeline_config.use_discordant = file_config.use_discordant
+    # Build config: start from file config (or defaults), override with CLI args
+    pipeline_config = load_config(config) if config else PipelineConfig()
+    pipeline_config.razers3_path = razers3
+    pipeline_config.mapper = mapper
+    pipeline_config.razers3_args = razers3_args
+    pipeline_config.yara_args = yara_args
+    pipeline_config.mapping_threads = threads
+    pipeline_config.solver = solver
+    pipeline_config.ilp_threads = ilp_threads
+    pipeline_config.delete_bam = not keep_bam
 
     # Run the pipeline
     if verbose:
@@ -215,6 +199,7 @@ def run(
         click.echo(f"Input files: {list(input_files)}")
         click.echo(f"Sequence type: {seq_type}")
         click.echo(f"Output directory: {outdir}")
+        click.echo(f"Mapper: {mapper}")
         click.echo(f"Solver: {solver}")
         click.echo()
 
@@ -275,6 +260,15 @@ def check_deps():
         click.echo(click.style("  [MISSING]", fg="red") + " RazerS3")
         click.echo("    Install with: conda install -c bioconda razers3")
         all_ok = False
+
+    # Check YARA (optional alternative mapper)
+    yara_mapper = shutil.which("yara_mapper")
+    yara_indexer = shutil.which("yara_indexer")
+    if yara_mapper and yara_indexer:
+        click.echo(click.style("  [OK]", fg="green") + f" YARA mapper: {yara_mapper}")
+        click.echo(click.style("  [OK]", fg="green") + f" YARA indexer: {yara_indexer}")
+    else:
+        click.echo(click.style("  [N/A]", fg="cyan") + " YARA (optional alternative mapper: conda install -c bioconda yara)")
 
     # Check GLPK
     glpsol = shutil.which("glpsol")
@@ -338,6 +332,10 @@ def init_config(output, force):
     """
     config_content = """[mapping]
 
+# Read mapper to use: razers3 or yara
+# YARA is faster and more memory-efficient for large WGS datasets.
+# mapper=razers3
+
 # Path to RazerS3 binary. If not specified, searched in PATH.
 # razers3=/path/to/razers3
 
@@ -364,6 +362,23 @@ unpaired_weight=0
 
 # Use discordant read pairs (where ends map to different alleles)
 use_discordant=false
+
+[razers3]
+
+# Arguments passed to razers3 (excluding threads and output path).
+# -i: percent identity threshold (0-100)
+# -m: max number of matches per read
+# --distance-range: distance range for best mapping
+# -pa: purge ambiguous alignments
+args = -i 97 -m 99999 --distance-range 0 -pa
+
+[yara]
+
+# Arguments passed to yara_mapper (excluding threads and output path).
+# Uses nf-core/hlatyping defaults.
+# -e: error rate in percent (0-10)
+# -f: output format (bam or sam)
+args = -e 3 -f bam
 """
 
     output_path = Path(output)
