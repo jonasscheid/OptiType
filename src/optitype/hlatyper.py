@@ -277,7 +277,7 @@ def get_features(
         elif feat in feats_complete:
             feats_to_include.append(feats_complete[feat])
         else:
-            warnings.warn(f"Feature {feat} not found for allele {allele_id}")
+            warnings.warn(f"Feature {feat} not found for allele {allele_id}", stacklevel=2)
 
     return pd.DataFrame(feats_to_include)
 
@@ -302,8 +302,6 @@ def calculate_coverage(
     """
     if len(alignment) not in (2, 4, 5):
         raise ValueError(f"Alignment tuple must have 2, 4 or 5 elements, got {len(alignment)}")
-    has_pairing_info = len(alignment) == 5
-
     if len(alignment) == 2:
         matrix_pos, read_details = alignment[:2]
         pos = matrix_pos[alleles_to_plot]
@@ -360,6 +358,7 @@ def calculate_coverage(
                 read_details.loc[reads]["mismatches"],
                 hit_counts[reads],
                 pairing_info.loc[reads][allele],
+                strict=False,
             ):
                 if not i_pairing:
                     continue

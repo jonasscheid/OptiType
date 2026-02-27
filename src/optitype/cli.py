@@ -238,7 +238,7 @@ def run(
         click.echo(f"Coverage plot: {result.output_plot}")
 
     except Exception as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from None
 
 
 @main.command("check-deps")

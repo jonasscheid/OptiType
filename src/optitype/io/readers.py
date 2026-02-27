@@ -4,7 +4,7 @@ import logging
 import re
 import sys
 from collections import OrderedDict
-from functools import lru_cache
+from functools import cache
 
 import numpy as np
 import pandas as pd
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 CIGAR_SLICER = re.compile(r"[0-9]+[MD]")
 
 
-@lru_cache(maxsize=None)
+@cache
 def _length_on_reference(cigar_string: str) -> int:
     """Calculate the length a read spans on the reference from its CIGAR string."""
     return sum(int(p[:-1]) for p in CIGAR_SLICER.findall(cigar_string))

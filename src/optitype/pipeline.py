@@ -187,7 +187,7 @@ def _run_razers3(
     _check_binary(config.razers3_path, "Install with: conda install -c bioconda razers3")
     logger.debug("Mapping with RazerS3 using %d threads...", threads)
 
-    for sample, outbam in zip(input_files, bam_paths):
+    for sample, outbam in zip(input_files, bam_paths, strict=True):
         logger.debug("%s Mapping %s to %s reference...", elapsed(), os.path.basename(sample), ref_type.upper())
         _run_cmd([
             config.razers3_path, *config.razers3_args,
@@ -213,7 +213,7 @@ def _run_yara(
         logger.debug("%s Building YARA index for %s reference...", elapsed(), ref_type.upper())
         _run_cmd(["yara_indexer", "-o", index_prefix, str(mapping_ref)], "yara_indexer")
 
-        for sample, outbam in zip(input_files, bam_paths):
+        for sample, outbam in zip(input_files, bam_paths, strict=True):
             logger.debug("%s Mapping %s to %s reference...", elapsed(), os.path.basename(sample), ref_type.upper())
             _run_cmd([
                 "yara_mapper", *config.yara_args,
@@ -333,7 +333,7 @@ def run_pipeline(
 
         # Handle read ID suffixes
         if len(set(r[-1] for r in id1)) == 1 and len(set(r[-1] for r in id2)) == 1:
-            cut_last_char = lambda x: x[:-1]
+            def cut_last_char(x): return x[:-1]
             binary1.index = list(map(cut_last_char, binary1.index))
             binary2.index = list(map(cut_last_char, binary2.index))
             pos.index = list(map(cut_last_char, pos.index))

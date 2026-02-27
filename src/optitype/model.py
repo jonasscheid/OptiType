@@ -10,6 +10,7 @@ import logging
 from collections import defaultdict
 
 import pandas as pd
+from pyomo.common.errors import ApplicationError
 from pyomo.environ import (
     Binary,
     ConcreteModel,
@@ -21,7 +22,6 @@ from pyomo.environ import (
     Var,
     maximize,
 )
-from pyomo.common.errors import ApplicationError
 from pyomo.opt import SolverFactory, TerminationCondition
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,7 @@ class OptiType:
 
         # Initialize Sets
         model.LociNames = Set(initialize=list(loci_alleles.keys()))
-        model.Loci = Set(model.LociNames, initialize=lambda m, l: loci_alleles[l])
+        model.Loci = Set(model.LociNames, initialize=lambda m, locus: loci_alleles[locus])
 
         L = list(itertools.chain(*list(loci_alleles.values())))
         reconst = {allele_id: 0.01 for allele_id in L if "_" in allele_id}
@@ -126,11 +126,11 @@ class OptiType:
         # Constraints
         model.max_allel_selection = Constraint(
             model.LociNames,
-            rule=lambda model, l: sum(model.x[a] for a in model.Loci[l]) <= model.t_allele,
+            rule=lambda model, locus: sum(model.x[a] for a in model.Loci[locus]) <= model.t_allele,
         )
         model.min_allel_selection = Constraint(
             model.LociNames,
-            rule=lambda model, l: sum(model.x[a] for a in model.Loci[l]) >= 1,
+            rule=lambda model, locus: sum(model.x[a] for a in model.Loci[locus]) >= 1,
         )
         model.is_read_cov = Constraint(
             model.R,
@@ -199,7 +199,7 @@ class OptiType:
         if self._changed or self._ks != ks:
             self._ks = ks
 
-            for k in range(ks):
+            for _k in range(ks):
                 expr = 0
 
                 try:
