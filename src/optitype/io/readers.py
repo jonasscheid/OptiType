@@ -99,6 +99,8 @@ def sam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
                 continue
 
             fields = line.strip().split("\t")
+            if int(fields[1]) & 4:  # unmapped
+                continue
             read_id, allele_id, position, cigar = fields[0], fields[2], fields[3], fields[5]
             nm = fields[nm_index] if nm_index is not None else "NM:i:0"
 
@@ -163,6 +165,8 @@ def pysam_to_dataframe(samfile: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     hit_counter = 0
 
     for aln in sam:
+        if aln.is_unmapped:
+            continue
         if aln.qname not in hits:
             hits[aln.qname] = np.zeros(nref, dtype=np.uint16)
             nm = aln.get_tag("NM") if aln.has_tag("NM") else 0
